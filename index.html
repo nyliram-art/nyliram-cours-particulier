@@ -1,0 +1,1178 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+<meta name="theme-color" content="#0f1923"/>
+<meta name="description" content="Nyliram Cours Particulier — Gestion des élèves, séances et fiches de paie"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Nyliram"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<link rel="manifest" href="manifest.json"/>
+<title>Nyliram Cours Particulier</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f1923;font-family:Georgia,serif}
+#splash{position:fixed;inset:0;background:#0f1923;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.4s}
+#splash h1{font-family:Georgia,serif;font-size:28px;color:#fff;font-weight:700;text-align:center;line-height:1.3}
+#splash p{color:#b8860b;font-size:13px;margin-top:8px;font-style:italic}
+.dot-loader{display:flex;gap:6px;margin-top:32px}
+.dot{width:8px;height:8px;border-radius:50%;background:#b8860b;animation:bounce 1.2s infinite}
+.dot:nth-child(2){animation-delay:0.2s}
+.dot:nth-child(3){animation-delay:0.4s}
+@keyframes bounce{0%,80%,100%{transform:scale(0.6);opacity:0.4}40%{transform:scale(1);opacity:1}}
+#install-banner{position:fixed;bottom:0;left:0;right:0;background:#0f1923;border-top:1px solid #b8860b;padding:14px 20px;display:none;justify-content:space-between;align-items:center;z-index:500;gap:12px}
+#install-banner p{color:#fff;font-size:13px;font-family:Georgia,serif}
+#install-banner p span{color:#b8860b;font-weight:700}
+.btn-install{background:#b8860b;color:#fff;border:none;padding:8px 18px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600}
+.btn-dismiss{background:transparent;color:rgba(255,255,255,0.4);border:none;cursor:pointer;font-size:18px}
+</style>
+</head>
+<body>
+<div id="splash">
+  <h1>Nyliram<br/>Cours Particulier</h1>
+  <p>Maths · Français · Histoire-Géo</p>
+  <div class="dot-loader"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+</div>
+<div id="install-banner">
+  <p>📲 Installer <span>Nyliram</span> sur cet appareil</p>
+  <div style="display:flex;gap:8px;align-items:center">
+    <button class="btn-install" id="btn-install">Installer</button>
+    <button class="btn-dismiss" id="btn-dismiss">✕</button>
+  </div>
+</div>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script>
+// Storage API polyfill for browser
+window.storage = {
+  _data: {},
+  _loaded: false,
+  _load() {
+    if(!this._loaded) {
+      try { this._data = JSON.parse(localStorage.getItem('nyliram_storage') || '{}'); } catch(e) { this._data = {}; }
+      this._loaded = true;
+    }
+  },
+  _save() { try { localStorage.setItem('nyliram_storage', JSON.stringify(this._data)); } catch(e) {} },
+  async get(key) {
+    this._load();
+    if(this._data[key] !== undefined) return { key, value: this._data[key] };
+    throw new Error('Key not found: ' + key);
+  },
+  async set(key, value) {
+    this._load();
+    this._data[key] = value;
+    this._save();
+    return { key, value };
+  },
+  async delete(key) {
+    this._load();
+    delete this._data[key];
+    this._save();
+    return { key, deleted: true };
+  },
+  async list(prefix) {
+    this._load();
+    const keys = Object.keys(this._data).filter(k => !prefix || k.startsWith(prefix));
+    return { keys };
+  }
+};
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ── Palette ───────────────────────────────────────────────────
+const C = {
+  ink: "#0f1923", paper: "#faf8f4", cream: "#f2ede4",
+  border: "#e8e0d0", muted: "#8a8070",
+  maths: "#1a3e6e", mathsL: "#dce9f7",
+  fr: "#7a1a1a",   frL:    "#fde8e8",
+  hg: "#2d5a1b",   hgL:    "#d4edda",
+  gold: "#b8860b", goldL:  "#fff3cd",
+  ok: "#1a5e3a",   warn:   "#7a0000",
+};
+
+const MATIERES = {
+  Maths:          { color: C.maths, light: C.mathsL, icon: "∑" },
+  Français:       { color: C.fr,    light: C.frL,    icon: "✍" },
+  "Histoire-Géo": { color: C.hg,    light: C.hgL,    icon: "🌍" },
+};
+
+const NIVEAUX = ["CM1","CM2","6ème","5ème","4ème","3ème","2nde"];
+
+const CHAPITRES = {
+  Maths: ["Fractions","Nombres relatifs","Puissances","Calcul littéral","Équations",
+          "Pythagore","Thalès","Trigonométrie","Fonctions","Stats & Proba","Algorithmique"],
+  Français: ["Lecture / Analyse","Grammaire","Orthographe","Vocabulaire",
+             "Rédaction","Oral","Méthode brevet"],
+  "Histoire-Géo": ["Repères chronologiques","Lecture de docs","Rédaction historique",
+                   "Cartographie","Géo physique","Géopolitique","EMC","Méthode composition"],
+};
+
+const MOIS = ["Janvier","Février","Mars","Avril","Mai","Juin",
+              "Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
+
+// ── Storage ───────────────────────────────────────────────────
+const KEYS = { eleves: "eleves_v2", seances: "seances_v2", progression: "prog_v2", fiches: "fiches_v2" };
+
+async function load(key) {
+  try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : null; }
+  catch { return null; }
+}
+async function save(key, data) {
+  try { await window.storage.set(key, JSON.stringify(data)); } catch(e) { console.error(e); }
+}
+
+// ── Utils ─────────────────────────────────────────────────────
+const uid  = () => Math.random().toString(36).slice(2, 9);
+const today = () => new Date().toISOString().slice(0, 10);
+const fmt  = (d) => d ? new Date(d + "T00:00:00").toLocaleDateString("fr-FR") : "—";
+const initials = (name) => (name || "?").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+const currentYear = new Date().getFullYear();
+const currentMois = new Date().getMonth(); // 0-indexed
+
+// ── CSS ───────────────────────────────────────────────────────
+const css = `
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Source+Serif+4:ital,wght@0,300;0,400;0,600;1,300&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Source Serif 4', Georgia, serif; background: ${C.paper}; color: ${C.ink}; min-height: 100vh; }
+  .app { display: flex; min-height: 100vh; }
+
+  /* SIDEBAR */
+  .sidebar { width: 220px; min-width: 220px; background: ${C.ink}; display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; overflow: hidden; }
+  .sidebar-logo { padding: 24px 20px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .sidebar-logo h1 { font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; color: #fff; line-height: 1.3; }
+  .sidebar-logo p { font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 3px; font-style: italic; }
+  .nav { padding: 12px 0; flex: 1; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 20px; cursor: pointer; color: rgba(255,255,255,0.55); font-size: 13px; transition: all 0.15s; border-left: 3px solid transparent; font-family: 'Source Serif 4', serif; }
+  .nav-item:hover { color: #fff; background: rgba(255,255,255,0.05); }
+  .nav-item.active { color: #fff; background: rgba(255,255,255,0.08); border-left-color: ${C.gold}; }
+  .nav-icon { font-size: 15px; width: 20px; text-align: center; }
+  .nav-badge { margin-left: auto; background: ${C.warn}; color: #fff; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px; }
+  .sidebar-footer { padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.08); }
+  .sidebar-footer p { font-size: 10px; color: rgba(255,255,255,0.3); font-style: italic; }
+
+  /* MAIN */
+  .main { flex: 1; overflow-y: auto; }
+  .page { padding: 32px 36px; max-width: 1100px; }
+  .page-title { font-family: 'Playfair Display', serif; font-size: 26px; font-weight: 700; margin-bottom: 4px; }
+  .page-sub { font-size: 13px; color: ${C.muted}; margin-bottom: 28px; font-style: italic; }
+
+  /* CARDS */
+  .card { background: #fff; border: 1px solid ${C.border}; border-radius: 10px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.04); }
+  .card-title { font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 600; margin-bottom: 14px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; }
+
+  /* STAT */
+  .stat-card { background: #fff; border: 1px solid ${C.border}; border-radius: 10px; padding: 18px 20px; display: flex; flex-direction: column; gap: 4px; }
+  .stat-label { font-size: 11px; color: ${C.muted}; text-transform: uppercase; letter-spacing: 0.08em; }
+  .stat-value { font-family: 'Playfair Display', serif; font-size: 28px; font-weight: 700; }
+  .stat-sub { font-size: 11px; color: ${C.muted}; font-style: italic; }
+
+  /* ELEVE CARD */
+  .eleve-card { background: #fff; border: 1px solid ${C.border}; border-radius: 10px; padding: 18px; cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; gap: 10px; }
+  .eleve-card:hover { border-color: ${C.gold}; box-shadow: 0 4px 16px rgba(0,0,0,0.08); transform: translateY(-1px); }
+
+  /* AVATAR (initiales uniquement) */
+  .avatar { border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: 'Playfair Display', serif; font-weight: 700; color: #fff; flex-shrink: 0; }
+
+  /* BUTTONS */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 600; font-family: 'Source Serif 4', serif; transition: all 0.15s; }
+  .btn-primary { background: ${C.ink}; color: #fff; }
+  .btn-primary:hover { background: #2a3a4d; }
+  .btn-gold { background: ${C.gold}; color: #fff; }
+  .btn-gold:hover { background: #9a720a; }
+  .btn-outline { background: transparent; color: ${C.ink}; border: 1.5px solid ${C.border}; }
+  .btn-outline:hover { border-color: ${C.ink}; background: ${C.cream}; }
+  .btn-danger { background: ${C.warn}; color: #fff; }
+  .btn-danger:hover { background: #5a0000; }
+  .btn-ok { background: ${C.ok}; color: #fff; }
+  .btn-sm { padding: 5px 12px; font-size: 11px; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* FORM */
+  .form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+  .form-label { font-size: 11px; font-weight: 600; color: ${C.muted}; text-transform: uppercase; letter-spacing: 0.07em; }
+  .form-input, .form-select, .form-textarea { padding: 9px 12px; border: 1.5px solid ${C.border}; border-radius: 6px; font-size: 13px; background: #fff; font-family: 'Source Serif 4', serif; color: ${C.ink}; transition: border-color 0.15s; outline: none; }
+  .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: ${C.gold}; }
+  .form-textarea { resize: vertical; min-height: 60px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .form-row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+  /* MODAL */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+  .modal { background: #fff; border-radius: 14px; padding: 28px; max-width: 560px; width: 100%; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+  .modal-wide { max-width: 680px; }
+  .modal-title { font-family: 'Playfair Display', serif; font-size: 20px; font-weight: 700; margin-bottom: 20px; }
+  .modal-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; padding-top: 16px; border-top: 1px solid ${C.border}; }
+
+  /* TABLE */
+  .table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .table th { padding: 10px 12px; background: ${C.cream}; text-align: left; font-size: 11px; font-weight: 600; color: ${C.muted}; text-transform: uppercase; letter-spacing: 0.07em; border-bottom: 1px solid ${C.border}; }
+  .table td { padding: 10px 12px; border-bottom: 1px solid ${C.border}; vertical-align: middle; }
+  .table tr:last-child td { border-bottom: none; }
+  .table tr:hover td { background: ${C.cream}; }
+
+  /* PROGRESS */
+  .progress-bar { height: 6px; background: ${C.border}; border-radius: 3px; overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+
+  /* STARS */
+  .star-select { display: flex; gap: 4px; }
+  .star { font-size: 20px; cursor: pointer; opacity: 0.25; transition: opacity 0.1s; }
+  .star.active { opacity: 1; }
+
+  /* TAGS */
+  .tags { display: flex; gap: 5px; flex-wrap: wrap; }
+  .tag { padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; }
+  .badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .chip { padding: 5px 12px; border-radius: 20px; font-size: 12px; cursor: pointer; border: 1.5px solid ${C.border}; background: #fff; color: ${C.muted}; transition: all 0.15s; font-family: 'Source Serif 4', serif; }
+  .chip.selected { font-weight: 600; }
+  .chip-group { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* DIVIDER */
+  .divider { height: 1px; background: ${C.border}; margin: 20px 0; }
+
+  /* EMPTY */
+  .empty { text-align: center; padding: 40px 20px; color: ${C.muted}; }
+  .empty-icon { font-size: 40px; margin-bottom: 10px; opacity: 0.4; }
+  .empty p { font-size: 13px; font-style: italic; }
+
+  /* PROG CHIP */
+  .prog-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 20px; font-size: 11px; cursor: pointer; transition: all 0.1s; margin: 2px; }
+
+  /* FICHE DE PAIE */
+  .fiche-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+  .fiche-cell { border: 1px solid ${C.border}; border-radius: 6px; padding: 8px 6px; text-align: center; font-size: 11px; position: relative; min-height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; transition: all 0.15s; }
+  .fiche-cell.has-file { border-color: ${C.ok}; background: ${C.hgL}; cursor: pointer; }
+  .fiche-cell.has-file:hover { background: #bfe8cc; }
+  .fiche-cell .mois-label { font-weight: 600; color: ${C.ink}; font-size: 11px; }
+  .fiche-cell .upload-zone { font-size: 18px; opacity: 0.3; cursor: pointer; }
+  .fiche-cell.has-file .upload-zone { opacity: 1; }
+  .upload-input { display: none; }
+
+  .alert { padding: 12px 16px; border-radius: 8px; font-size: 13px; margin-bottom: 14px; }
+  .alert-info { background: ${C.mathsL}; color: ${C.maths}; border-left: 3px solid ${C.maths}; }
+  .alert-warn { background: ${C.goldL}; color: ${C.gold}; border-left: 3px solid ${C.gold}; }
+  .alert-ok   { background: ${C.hgL};   color: ${C.hg};   border-left: 3px solid ${C.hg}; }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 3px; }
+
+  @media (max-width: 900px) {
+    .grid-4 { grid-template-columns: 1fr 1fr; }
+    .grid-3 { grid-template-columns: 1fr 1fr; }
+    .fiche-grid { grid-template-columns: repeat(4,1fr); }
+  }
+`;
+
+// ══════════════════════════════════════════════════════════════
+// SUB-COMPONENTS
+// ══════════════════════════════════════════════════════════════
+
+function MatiereTag({ m }) {
+  const d = MATIERES[m] || { color: C.muted, light: C.cream };
+  return <span className="tag" style={{ background: d.light, color: d.color }}>{m}</span>;
+}
+
+function Avatar({ name, color, size = 40 }) {
+  return (
+    <div className="avatar" style={{ background: color || C.maths, width: size, height: size, fontSize: size * 0.35 }}>
+      {initials(name)}
+    </div>
+  );
+}
+
+function StarSelect({ value, onChange }) {
+  return (
+    <div className="star-select">
+      {[1,2,3,4,5].map(i => (
+        <span key={i} className={`star ${i <= value ? "active" : ""}`} onClick={() => onChange(i)}>⭐</span>
+      ))}
+    </div>
+  );
+}
+
+// ── Grille fiches de paie ─────────────────────────────────────
+function FichePaieGrid({ eleveId, fichesPaie, onUpload, onDownload, onDelete, annee }) {
+  const refs = useRef({});
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>Fiches de paie — {annee}</div>
+        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>
+          Cliquer sur 📎 pour déposer, sur le nom pour télécharger
+        </div>
+      </div>
+      <div className="fiche-grid">
+        {MOIS.map((mois, idx) => {
+          const key = `${eleveId}_${annee}_${idx}`;
+          const fiche = fichesPaie[key];
+          return (
+            <div key={idx} className={`fiche-cell ${fiche ? "has-file" : ""}`}>
+              <div className="mois-label">{mois.slice(0, 3)}</div>
+              {fiche ? (
+                <>
+                  <div style={{ fontSize: 18 }} title="Fiche déposée">✅</div>
+                  <div style={{ fontSize: 9, color: C.ok, maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer" }}
+                    title={fiche.name} onClick={() => onDownload(key)}>
+                    {fiche.name}
+                  </div>
+                  <button className="btn btn-sm" style={{ fontSize: 9, padding: "2px 6px", background: "transparent", color: C.warn, border: "none", cursor: "pointer" }}
+                    onClick={(e) => { e.stopPropagation(); onDelete(key); }}>✕</button>
+                </>
+              ) : (
+                <>
+                  <label htmlFor={`upload-${key}`} style={{ cursor: "pointer", fontSize: 22, opacity: 0.35 }} title="Déposer une fiche de paie">📎</label>
+                  <input id={`upload-${key}`} className="upload-input" type="file"
+                    accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx"
+                    onChange={(e) => { if (e.target.files[0]) onUpload(key, e.target.files[0]); e.target.value = ""; }} />
+                  <div style={{ fontSize: 9, color: C.muted }}>Déposer</div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ══ DASHBOARD ════════════════════════════════════════════════
+function Dashboard({ eleves, seances, fichesPaie, onNav }) {
+  const now = new Date();
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const seancesMois = seances.filter(s => s.date?.startsWith(thisMonth));
+
+  // Fiches manquantes mois courant
+  const fichesMissingMois = eleves.filter(e => {
+    const key = `${e.id}_${now.getFullYear()}_${now.getMonth()}`;
+    return !fichesPaie[key];
+  });
+
+  const alertes = [];
+  eleves.forEach(e => {
+    const der = seances.filter(s => s.eleveId === e.id).sort((a,b) => b.date?.localeCompare(a.date))[0];
+    if (der) {
+      const diff = Math.floor((now - new Date(der.date)) / 86400000);
+      if (diff > 14) alertes.push({ eleve: `${e.prenom} ${e.nom}`, msg: `Dernière séance il y a ${diff} jours` });
+    }
+  });
+  if (fichesMissingMois.length > 0) {
+    alertes.unshift({ eleve: "Fiches de paie", msg: `${fichesMissingMois.length} fiche(s) manquante(s) pour ${MOIS[now.getMonth()]}`, type: "paie" });
+  }
+
+  // Séances par matière
+  const seancesParMat = Object.keys(MATIERES).map(m => ({
+    m, count: seances.filter(s => s.matiere === m).length
+  }));
+
+  return (
+    <div className="page">
+      <div className="page-title">Tableau de bord</div>
+      <div className="page-sub">Vue d'ensemble — {now.toLocaleDateString("fr-FR", { month: "long", year: "numeric" })}</div>
+
+      <div className="grid-4" style={{ marginBottom: 24 }}>
+        {[
+          { label: "Élèves actifs", value: eleves.length, sub: "CM1 → 2nde", icon: "🎓" },
+          { label: "Séances ce mois", value: seancesMois.length, sub: `${seances.length} au total`, icon: "📅" },
+          { label: "Fiches de paie", value: Object.keys(fichesPaie).length, sub: fichesMissingMois.length > 0 ? `${fichesMissingMois.length} manquante(s)` : "À jour ✓", icon: "📄" },
+          { label: "Alertes", value: alertes.length, sub: alertes.length > 0 ? "À traiter" : "Tout est OK ✓", icon: "🔔" },
+        ].map(s => (
+          <div key={s.label} className="stat-card">
+            <div style={{ fontSize: 22 }}>{s.icon}</div>
+            <div className="stat-value">{s.value}</div>
+            <div className="stat-label">{s.label}</div>
+            <div className="stat-sub">{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {alertes.length > 0 && (
+        <div className="card" style={{ marginBottom: 20, borderLeft: `3px solid ${C.gold}` }}>
+          <div className="card-title">⚠ Alertes</div>
+          {alertes.map((a, i) => (
+            <div key={i} className={`alert ${a.type === "paie" ? "alert-warn" : "alert-info"}`} style={{ marginBottom: 6 }}>
+              <strong>{a.eleve}</strong> — {a.msg}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="grid-2">
+        <div className="card">
+          <div className="card-title">Mes élèves</div>
+          {eleves.length === 0 ? (
+            <div className="empty"><div className="empty-icon">🎓</div><p>Aucun élève enregistré</p></div>
+          ) : eleves.map(e => {
+            const der = seances.filter(s => s.eleveId === e.id).sort((a,b) => b.date?.localeCompare(a.date))[0];
+            return (
+              <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px solid ${C.border}`, cursor: "pointer" }}
+                onClick={() => onNav("eleves")}>
+                <Avatar name={`${e.prenom} ${e.nom}`} color={MATIERES[e.matieres?.[0]]?.color} size={36} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{e.prenom} {e.nom}</div>
+                  <div style={{ fontSize: 11, color: C.muted }}>{e.niveau} · {der ? fmt(der.date) : "Aucune séance"}</div>
+                </div>
+                <div className="tags">{e.matieres?.slice(0,1).map(m => <MatiereTag key={m} m={m} />)}</div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="card">
+          <div className="card-title">Dernières séances</div>
+          {seances.length === 0 ? (
+            <div className="empty"><div className="empty-icon">📚</div><p>Aucune séance enregistrée</p></div>
+          ) : [...seances].sort((a,b) => b.date?.localeCompare(a.date)).slice(0,6).map(s => {
+            const el = eleves.find(e => e.id === s.eleveId);
+            return (
+              <div key={s.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "7px 0", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: 11, color: C.muted, minWidth: 58, paddingTop: 2 }}>{fmt(s.date)}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{el ? `${el.prenom} ${el.nom}` : "—"}</div>
+                  <div style={{ fontSize: 11, color: C.muted }}>{s.matiere} · {s.duree}h · {s.chapitre || "—"}</div>
+                </div>
+                <MatiereTag m={s.matiere} />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══ ÉLÈVES ═══════════════════════════════════════════════════
+function Eleves({ eleves, seances, onAdd, onEdit, onDelete, onSelect }) {
+  const [search, setSearch] = useState("");
+  const filtered = eleves.filter(e =>
+    `${e.prenom} ${e.nom} ${e.niveau}`.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div className="page">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
+        <div>
+          <div className="page-title">Mes élèves</div>
+          <div className="page-sub">{eleves.length} élève{eleves.length !== 1 ? "s" : ""} enregistré{eleves.length !== 1 ? "s" : ""}</div>
+        </div>
+        <button className="btn btn-gold" onClick={onAdd}>+ Nouvel élève</button>
+      </div>
+
+      <input className="form-input" placeholder="🔍 Rechercher..." value={search}
+        onChange={e => setSearch(e.target.value)} style={{ width: 280, marginBottom: 20 }} />
+
+      {filtered.length === 0 ? (
+        <div className="empty"><div className="empty-icon">🎓</div><p>Aucun élève</p></div>
+      ) : (
+        <div className="grid-3">
+          {filtered.map(e => {
+            const sEl = seances.filter(s => s.eleveId === e.id);
+            const der = sEl.sort((a,b) => b.date?.localeCompare(a.date))[0];
+            return (
+              <div key={e.id} className="eleve-card" onClick={() => onSelect(e)}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <Avatar name={`${e.prenom} ${e.nom}`} color={MATIERES[e.matieres?.[0]]?.color} />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{e.prenom} {e.nom}</div>
+                    <div style={{ fontSize: 11, color: C.muted }}>{e.niveau} · {e.etablissement || "—"}</div>
+                  </div>
+                </div>
+                <div className="tags">{e.matieres?.map(m => <MatiereTag key={m} m={m} />)}</div>
+                <div style={{ fontSize: 11, color: C.muted, display: "flex", gap: 14 }}>
+                  <span>📅 {sEl.length} séance{sEl.length !== 1 ? "s" : ""}</span>
+                  <span>🕐 {der ? fmt(der.date) : "Aucune"}</span>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn btn-outline btn-sm" onClick={ev => { ev.stopPropagation(); onEdit(e); }}>Modifier</button>
+                  <button className="btn btn-danger btn-sm" onClick={ev => { ev.stopPropagation(); onDelete(e.id); }}>Supprimer</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══ FICHE ÉLÈVE ══════════════════════════════════════════════
+function FicheEleve({ eleve, seances, progression, fichesPaie, onBack, onAddSeance, onToggleProg, onUploadFiche, onDownloadFiche, onDeleteFiche }) {
+  const [annee, setAnnee] = useState(currentYear);
+  const sEl = seances.filter(s => s.eleveId === eleve.id).sort((a,b) => b.date?.localeCompare(a.date));
+  const color = MATIERES[eleve.matieres?.[0]]?.color || C.maths;
+  const prog = progression[eleve.id] || {};
+
+  // Stats fiches paie pour cet élève
+  const fichesCetEleve = Object.keys(fichesPaie).filter(k => k.startsWith(`${eleve.id}_${annee}_`));
+  const fichesMissingCount = 12 - fichesCetEleve.length;
+
+  return (
+    <div className="page">
+      <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
+        <button className="btn btn-outline btn-sm" onClick={onBack}>← Retour</button>
+        <button className="btn btn-gold" onClick={onAddSeance}>+ Nouvelle séance</button>
+      </div>
+
+      {/* Header élève */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24, paddingBottom: 20, borderBottom: `1px solid ${C.border}` }}>
+        <Avatar name={`${eleve.prenom} ${eleve.nom}`} color={color} size={56} />
+        <div>
+          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, fontWeight: 700 }}>{eleve.prenom} {eleve.nom}</div>
+          <div style={{ fontSize: 13, color: C.muted, fontStyle: "italic" }}>{eleve.niveau} · {eleve.etablissement || "—"}</div>
+          <div className="tags" style={{ marginTop: 6 }}>{eleve.matieres?.map(m => <MatiereTag key={m} m={m} />)}</div>
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 20 }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 22, fontFamily: "'Playfair Display', serif", fontWeight: 700 }}>{sEl.length}</div>
+            <div style={{ fontSize: 11, color: C.muted }}>Séances</div>
+          </div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 22, fontFamily: "'Playfair Display', serif", fontWeight: 700, color: fichesCetEleve.length === 12 ? C.ok : C.gold }}>
+              {fichesCetEleve.length}/12
+            </div>
+            <div style={{ fontSize: 11, color: C.muted }}>Fiches paie {annee}</div>
+          </div>
+        </div>
+      </div>
+
+      {eleve.objectif && <div className="alert alert-info" style={{ marginBottom: 16 }}><strong>Objectif :</strong> {eleve.objectif}</div>}
+
+      <div className="grid-2" style={{ marginBottom: 20 }}>
+        {/* Progression */}
+        <div className="card">
+          <div className="card-title">Progression par chapitre</div>
+          {eleve.matieres?.map(mat => (
+            <div key={mat} style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: MATIERES[mat]?.color, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{mat}</div>
+              <div style={{ display: "flex", flexWrap: "wrap" }}>
+                {CHAPITRES[mat]?.map(ch => {
+                  const state = (prog[mat] || {})[ch] || 0;
+                  const styles = [
+                    { bg: C.cream, color: C.muted, label: "—" },
+                    { bg: C.goldL, color: C.gold, label: "Vu" },
+                    { bg: C.mathsL, color: C.maths, label: "Ok" },
+                    { bg: C.hgL, color: C.hg, label: "✓" },
+                  ];
+                  const s = styles[Math.min(state, 3)];
+                  return (
+                    <span key={ch} className="prog-chip"
+                      style={{ background: s.bg, color: s.color, border: `1px solid ${s.color}30` }}
+                      onClick={() => onToggleProg(eleve.id, mat, ch)}
+                      title={`${ch} → ${["Non vu","Vu","Compris","Maîtrisé"][state]}`}>
+                      {ch} <span style={{ fontSize: 9, opacity: 0.7 }}>{s.label}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          <div style={{ fontSize: 10, color: C.muted, marginTop: 6, fontStyle: "italic" }}>Cliquer pour avancer : Non vu → Vu → Compris → Maîtrisé</div>
+        </div>
+
+        {/* Infos */}
+        <div className="card">
+          <div className="card-title">Informations</div>
+          {[
+            ["Email parents", eleve.emailParents],
+            ["Téléphone", eleve.telephone],
+            ["Difficultés", eleve.difficultes],
+            ["Agence", eleve.agence],
+          ].map(([l, v]) => v ? (
+            <div key={l} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>{l}</div>
+              <div style={{ fontSize: 13 }}>{v}</div>
+            </div>
+          ) : null)}
+        </div>
+      </div>
+
+      {/* FICHES DE PAIE */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div className="card-title" style={{ marginBottom: 0 }}>📄 Fiches de paie mensuelles</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <select className="form-select" value={annee} onChange={e => setAnnee(Number(e.target.value))}
+              style={{ padding: "5px 10px", fontSize: 13, width: 100 }}>
+              {[currentYear - 1, currentYear, currentYear + 1].map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {fichesMissingCount > 0 && (
+          <div className="alert alert-warn" style={{ marginBottom: 14 }}>
+            📎 {fichesMissingCount} fiche{fichesMissingCount > 1 ? "s" : ""} manquante{fichesMissingCount > 1 ? "s" : ""} pour {annee}
+          </div>
+        )}
+        {fichesMissingCount === 0 && (
+          <div className="alert alert-ok" style={{ marginBottom: 14 }}>
+            ✅ Toutes les fiches de paie {annee} sont déposées
+          </div>
+        )}
+
+        <FichePaieGrid
+          eleveId={eleve.id}
+          fichesPaie={fichesPaie}
+          onUpload={onUploadFiche}
+          onDownload={onDownloadFiche}
+          onDelete={onDeleteFiche}
+          annee={annee}
+        />
+
+        {/* Récap fiches déposées */}
+        {fichesCetEleve.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.muted, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>Récapitulatif des fichiers déposés</div>
+            <table className="table" style={{ fontSize: 12 }}>
+              <thead><tr><th>Mois</th><th>Fichier</th><th>Déposé le</th><th>Action</th></tr></thead>
+              <tbody>
+                {fichesCetEleve.sort().map(key => {
+                  const moisIdx = parseInt(key.split("_").pop());
+                  const f = fichesPaie[key];
+                  return (
+                    <tr key={key}>
+                      <td style={{ fontWeight: 600 }}>{MOIS[moisIdx]}</td>
+                      <td style={{ color: C.maths }}>📎 {f.name}</td>
+                      <td style={{ color: C.muted }}>{f.uploadedAt ? new Date(f.uploadedAt).toLocaleDateString("fr-FR") : "—"}</td>
+                      <td>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button className="btn btn-ok btn-sm" onClick={() => onDownloadFiche(key)}>⬇ Télécharger</button>
+                          <button className="btn btn-danger btn-sm" onClick={() => onDeleteFiche(key)}>✕</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Historique séances */}
+      <div className="card">
+        <div className="card-title">Historique des séances ({sEl.length})</div>
+        {sEl.length === 0 ? (
+          <div className="empty"><p>Aucune séance enregistrée</p></div>
+        ) : (
+          <table className="table">
+            <thead><tr><th>Date</th><th>Matière</th><th>Chapitre</th><th>Durée</th><th>Compréhension</th><th>Travail à faire</th><th>Observations</th></tr></thead>
+            <tbody>
+              {sEl.map(s => (
+                <tr key={s.id}>
+                  <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>{fmt(s.date)}</td>
+                  <td><MatiereTag m={s.matiere} /></td>
+                  <td style={{ fontSize: 12 }}>{s.chapitre || "—"}</td>
+                  <td style={{ fontSize: 12 }}>{s.duree}h</td>
+                  <td>{"⭐".repeat(s.comprehension || 0)}</td>
+                  <td style={{ fontSize: 12, color: C.muted, maxWidth: 160 }}>{s.travailMaison || "—"}</td>
+                  <td style={{ fontSize: 12, color: C.muted, maxWidth: 160 }}>{s.observation || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ══ SÉANCES ═══════════════════════════════════════════════════
+function Seances({ seances, eleves, onAdd }) {
+  const [filtre, setFiltre] = useState("all");
+  const filtered = seances.filter(s => filtre === "all" ? true : s.matiere === filtre)
+    .sort((a,b) => b.date?.localeCompare(a.date));
+
+  return (
+    <div className="page">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
+        <div>
+          <div className="page-title">Séances</div>
+          <div className="page-sub">{seances.length} séance{seances.length !== 1 ? "s" : ""} au total</div>
+        </div>
+        <button className="btn btn-gold" onClick={onAdd}>+ Nouvelle séance</button>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+        {[["all","Toutes"], ...Object.keys(MATIERES).map(m => [m, m])].map(([k, l]) => (
+          <button key={k} className={`btn btn-sm ${filtre === k ? "btn-primary" : "btn-outline"}`}
+            onClick={() => setFiltre(k)}>{l}</button>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="empty"><div className="empty-icon">📚</div><p>Aucune séance</p></div>
+      ) : (
+        <table className="table" style={{ background: "#fff", borderRadius: 10, overflow: "hidden", border: `1px solid ${C.border}` }}>
+          <thead>
+            <tr><th>Date</th><th>Élève</th><th>Matière</th><th>Chapitre</th><th>Durée</th><th>Compréhension</th><th>Travail à faire</th><th>Observations</th></tr>
+          </thead>
+          <tbody>
+            {filtered.map(s => {
+              const el = eleves.find(e => e.id === s.eleveId);
+              return (
+                <tr key={s.id}>
+                  <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>{fmt(s.date)}</td>
+                  <td>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>{el ? `${el.prenom} ${el.nom}` : "—"}</div>
+                    <div style={{ fontSize: 11, color: C.muted }}>{el?.niveau}</div>
+                  </td>
+                  <td><MatiereTag m={s.matiere} /></td>
+                  <td style={{ fontSize: 12 }}>{s.chapitre || "—"}</td>
+                  <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>{s.duree}h</td>
+                  <td>{"⭐".repeat(s.comprehension || 0)}</td>
+                  <td style={{ fontSize: 12, color: C.muted, maxWidth: 160 }}>{s.travailMaison || "—"}</td>
+                  <td style={{ fontSize: 12, color: C.muted, maxWidth: 160 }}>{s.observation || "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+// ══ FICHES DE PAIE (vue globale) ══════════════════════════════
+function FichesPaieGlobal({ eleves, fichesPaie, onUpload, onDownload, onDelete }) {
+  const [annee, setAnnee] = useState(currentYear);
+
+  const stats = eleves.map(e => {
+    const fiches = MOIS.map((_, idx) => fichesPaie[`${e.id}_${annee}_${idx}`] ? 1 : 0);
+    const count = fiches.reduce((a,b) => a + b, 0);
+    return { eleve: e, count, fiches };
+  });
+
+  const totalFiches = stats.reduce((a,s) => a + s.count, 0);
+  const totalAttendues = eleves.length * 12;
+
+  return (
+    <div className="page">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
+        <div>
+          <div className="page-title">Fiches de paie</div>
+          <div className="page-sub">Gestion mensuelle par élève — transmises par l'agence</div>
+        </div>
+        <select className="form-select" value={annee} onChange={e => setAnnee(Number(e.target.value))}
+          style={{ padding: "8px 12px", fontSize: 13, width: 110 }}>
+          {[currentYear - 1, currentYear, currentYear + 1].map(y => <option key={y} value={y}>{y}</option>)}
+        </select>
+      </div>
+
+      {/* Stats globales */}
+      <div className="grid-3" style={{ marginBottom: 24 }}>
+        <div className="stat-card">
+          <div style={{ fontSize: 22 }}>📄</div>
+          <div className="stat-value">{totalFiches}</div>
+          <div className="stat-label">Fiches déposées</div>
+          <div className="stat-sub">sur {totalAttendues} attendues</div>
+        </div>
+        <div className="stat-card">
+          <div style={{ fontSize: 22 }}>✅</div>
+          <div className="stat-value">{stats.filter(s => s.count === 12).length}</div>
+          <div className="stat-label">Élèves complets</div>
+          <div className="stat-sub">12/12 mois déposés</div>
+        </div>
+        <div className="stat-card">
+          <div style={{ fontSize: 22 }}>⚠️</div>
+          <div className="stat-value" style={{ color: totalAttendues - totalFiches > 0 ? C.warn : C.ok }}>
+            {totalAttendues - totalFiches}
+          </div>
+          <div className="stat-label">Fiches manquantes</div>
+          <div className="stat-sub">{annee}</div>
+        </div>
+      </div>
+
+      {/* Vue mois courant */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="card-title">Statut — {MOIS[currentMois]} {annee}</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          {eleves.map(e => {
+            const key = `${e.id}_${annee}_${currentMois}`;
+            const f = fichesPaie[key];
+            return (
+              <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderRadius: 8, border: `1px solid ${f ? C.hg : C.border}`, background: f ? C.hgL : "#fff" }}>
+                <Avatar name={`${e.prenom} ${e.nom}`} color={MATIERES[e.matieres?.[0]]?.color} size={28} />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{e.prenom} {e.nom}</div>
+                  <div style={{ fontSize: 10, color: f ? C.ok : C.warn }}>{f ? "✓ Fiche reçue" : "⚠ En attente"}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Grilles par élève */}
+      {eleves.map(e => (
+        <div key={e.id} className="card" style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+            <Avatar name={`${e.prenom} ${e.nom}`} color={MATIERES[e.matieres?.[0]]?.color} size={36} />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{e.prenom} {e.nom}</div>
+              <div style={{ fontSize: 11, color: C.muted }}>{e.niveau}</div>
+            </div>
+            <div style={{ marginLeft: "auto" }}>
+              {(() => {
+                const s = stats.find(x => x.eleve.id === e.id);
+                return (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div className="progress-bar" style={{ width: 80 }}>
+                      <div className="progress-fill" style={{ width: `${((s?.count || 0) / 12) * 100}%`, background: s?.count === 12 ? C.ok : C.gold }} />
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: s?.count === 12 ? C.ok : C.gold }}>{s?.count || 0}/12</span>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+          <FichePaieGrid
+            eleveId={e.id} fichesPaie={fichesPaie}
+            onUpload={onUpload} onDownload={onDownload} onDelete={onDelete}
+            annee={annee}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ══ MODAL ÉLÈVE ═══════════════════════════════════════════════
+function ModalEleve({ initial, onSave, onClose }) {
+  const [form, setForm] = useState(initial || {
+    prenom: "", nom: "", niveau: "", etablissement: "",
+    matieres: [], telephone: "", emailParents: "", objectif: "", difficultes: "", agence: ""
+  });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const toggleMat = m => set("matieres", form.matieres.includes(m) ? form.matieres.filter(x => x !== m) : [...form.matieres, m]);
+  const valid = form.prenom.trim() && form.nom.trim() && form.niveau && form.matieres.length > 0;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-title">{initial ? "Modifier l'élève" : "Nouvel élève"}</div>
+        <div className="form-row">
+          <div className="form-group"><label className="form-label">Prénom *</label><input className="form-input" value={form.prenom} onChange={e => set("prenom", e.target.value)} /></div>
+          <div className="form-group"><label className="form-label">Nom *</label><input className="form-input" value={form.nom} onChange={e => set("nom", e.target.value)} /></div>
+        </div>
+        <div className="form-row">
+          <div className="form-group"><label className="form-label">Niveau *</label>
+            <select className="form-select" value={form.niveau} onChange={e => set("niveau", e.target.value)}>
+              <option value="">— Choisir —</option>
+              {NIVEAUX.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+          <div className="form-group"><label className="form-label">Établissement</label><input className="form-input" value={form.etablissement} onChange={e => set("etablissement", e.target.value)} /></div>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Matières *</label>
+          <div className="chip-group">
+            {Object.keys(MATIERES).map(m => (
+              <span key={m} className={`chip ${form.matieres.includes(m) ? "selected" : ""}`}
+                style={form.matieres.includes(m) ? { borderColor: MATIERES[m].color, color: MATIERES[m].color, background: MATIERES[m].light } : {}}
+                onClick={() => toggleMat(m)}>{m}</span>
+            ))}
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-group"><label className="form-label">Téléphone parents</label><input className="form-input" value={form.telephone} onChange={e => set("telephone", e.target.value)} /></div>
+          <div className="form-group"><label className="form-label">Email parents</label><input className="form-input" value={form.emailParents} onChange={e => set("emailParents", e.target.value)} /></div>
+        </div>
+        <div className="form-row">
+          <div className="form-group"><label className="form-label">Agence (référence)</label><input className="form-input" value={form.agence} onChange={e => set("agence", e.target.value)} placeholder="Ex: Acadomia, Complétude…" /></div>
+          <div className="form-group"><label className="form-label">Objectif prioritaire</label><input className="form-input" value={form.objectif} onChange={e => set("objectif", e.target.value)} /></div>
+        </div>
+        <div className="form-group"><label className="form-label">Difficultés principales</label><textarea className="form-textarea" value={form.difficultes} onChange={e => set("difficultes", e.target.value)} /></div>
+        <div className="modal-footer">
+          <button className="btn btn-outline" onClick={onClose}>Annuler</button>
+          <button className="btn btn-gold" disabled={!valid} onClick={() => onSave({ ...form, id: form.id || uid() })}>
+            {initial ? "Enregistrer" : "Ajouter l'élève"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══ MODAL SÉANCE ══════════════════════════════════════════════
+function ModalSeance({ eleves, defaultEleveId, onSave, onClose }) {
+  const [form, setForm] = useState({
+    eleveId: defaultEleveId || (eleves[0]?.id || ""),
+    date: today(), matiere: "", chapitre: "", duree: "1",
+    comprehension: 3, participation: 3, travailMaison: "", observation: "",
+  });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const eleve = eleves.find(e => e.id === form.eleveId);
+  const matieres = eleve?.matieres || Object.keys(MATIERES);
+  const valid = form.eleveId && form.date && form.matiere && form.duree;
+  const chapitres = form.chapitre === "__autre" ? [] : (CHAPITRES[form.matiere] || []);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal modal-wide" onClick={e => e.stopPropagation()}>
+        <div className="modal-title">Nouvelle séance</div>
+        <div className="form-row">
+          <div className="form-group"><label className="form-label">Élève *</label>
+            <select className="form-select" value={form.eleveId} onChange={e => set("eleveId", e.target.value)}>
+              <option value="">— Choisir —</option>
+              {eleves.map(e => <option key={e.id} value={e.id}>{e.prenom} {e.nom} ({e.niveau})</option>)}
+            </select>
+          </div>
+          <div className="form-group"><label className="form-label">Date *</label>
+            <input className="form-input" type="date" value={form.date} onChange={e => set("date", e.target.value)} />
+          </div>
+        </div>
+        <div className="form-row-3">
+          <div className="form-group"><label className="form-label">Matière *</label>
+            <select className="form-select" value={form.matiere} onChange={e => { set("matiere", e.target.value); set("chapitre",""); }}>
+              <option value="">— Choisir —</option>
+              {matieres.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </div>
+          <div className="form-group"><label className="form-label">Chapitre</label>
+            <select className="form-select" value={form.chapitre} onChange={e => set("chapitre", e.target.value)}>
+              <option value="">— Choisir —</option>
+              {chapitres.map(c => <option key={c} value={c}>{c}</option>)}
+              <option value="__autre">Autre / Révisions…</option>
+            </select>
+          </div>
+          <div className="form-group"><label className="form-label">Durée (h) *</label>
+            <select className="form-select" value={form.duree} onChange={e => set("duree", e.target.value)}>
+              {["0.5","1","1.5","2","2.5","3"].map(d => <option key={d} value={d}>{d}h</option>)}
+            </select>
+          </div>
+        </div>
+        {form.chapitre === "__autre" && (
+          <div className="form-group"><label className="form-label">Préciser</label>
+            <input className="form-input" placeholder="Ex: Révisions brevet, contrôle blanc…" onChange={e => set("chapitre", e.target.value || "__autre")} />
+          </div>
+        )}
+        <div className="form-row">
+          <div className="form-group"><label className="form-label">Compréhension</label><StarSelect value={form.comprehension} onChange={v => set("comprehension", v)} /></div>
+          <div className="form-group"><label className="form-label">Participation</label><StarSelect value={form.participation} onChange={v => set("participation", v)} /></div>
+        </div>
+        <div className="form-group"><label className="form-label">Travail à faire pour la prochaine séance</label>
+          <textarea className="form-textarea" style={{ minHeight: 52 }} value={form.travailMaison}
+            onChange={e => set("travailMaison", e.target.value)}
+            placeholder="Ex: Exercices p.42, revoir la leçon sur les fractions…" />
+        </div>
+        <div className="form-group"><label className="form-label">Observations</label>
+          <textarea className="form-textarea" style={{ minHeight: 52 }} value={form.observation}
+            onChange={e => set("observation", e.target.value)}
+            placeholder="Ex: Bonne progression sur Pythagore, difficultés sur le calcul littéral…" />
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-outline" onClick={onClose}>Annuler</button>
+          <button className="btn btn-gold" disabled={!valid} onClick={() => { onSave({ ...form, id: uid() }); onClose(); }}>
+            Enregistrer la séance
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══ APP PRINCIPALE ════════════════════════════════════════════
+export default function App() {
+  const [page, setPage] = useState("dashboard");
+  const [eleves, setElevesRaw] = useState([]);
+  const [seances, setSeancesRaw] = useState([]);
+  const [progression, setProgressionRaw] = useState({});
+  const [fichesPaie, setFichesPaieRaw] = useState({});
+  // fichesPaie: { [eleveId_annee_moisIdx]: { name, data (base64), uploadedAt } }
+  const [loading, setLoading] = useState(true);
+  const [selectedEleve, setSelectedEleve] = useState(null);
+  const [modal, setModal] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const [e, s, p, f] = await Promise.all([load(KEYS.eleves), load(KEYS.seances), load(KEYS.progression), load(KEYS.fiches)]);
+      if (e) setElevesRaw(e);
+      if (s) setSeancesRaw(s);
+      if (p) setProgressionRaw(p);
+      if (f) setFichesPaieRaw(f);
+      setLoading(false);
+    })();
+  }, []);
+
+  const setEleves = useCallback(async (fn) => {
+    setElevesRaw(prev => { const next = typeof fn === "function" ? fn(prev) : fn; save(KEYS.eleves, next); return next; });
+  }, []);
+  const setSeances = useCallback(async (fn) => {
+    setSeancesRaw(prev => { const next = typeof fn === "function" ? fn(prev) : fn; save(KEYS.seances, next); return next; });
+  }, []);
+  const setProgression = useCallback(async (fn) => {
+    setProgressionRaw(prev => { const next = typeof fn === "function" ? fn(prev) : fn; save(KEYS.progression, next); return next; });
+  }, []);
+  const setFichesPaie = useCallback(async (fn) => {
+    setFichesPaieRaw(prev => { const next = typeof fn === "function" ? fn(prev) : fn; save(KEYS.fiches, next); return next; });
+  }, []);
+
+  const addEleve = (e) => { setEleves(prev => [...prev.filter(x => x.id !== e.id), e]); setModal(null); };
+  const deleteEleve = (id) => { if (window.confirm("Supprimer cet élève et toutes ses données ?")) { setEleves(prev => prev.filter(e => e.id !== id)); setSeances(prev => prev.filter(s => s.eleveId !== id)); }};
+  const addSeance = (s) => { setSeances(prev => [...prev, s]); };
+  const toggleProg = (eleveId, mat, ch) => {
+    setProgression(prev => {
+      const ep = prev[eleveId] || {};
+      const mp = ep[mat] || {};
+      return { ...prev, [eleveId]: { ...ep, [mat]: { ...mp, [ch]: ((mp[ch] || 0) + 1) % 4 } } };
+    });
+  };
+
+  // Upload fiche (lit le fichier en base64)
+  const uploadFiche = (key, file) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setFichesPaie(prev => ({
+        ...prev,
+        [key]: { name: file.name, data: ev.target.result, uploadedAt: new Date().toISOString(), type: file.type }
+      }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Télécharger fiche
+  const downloadFiche = (key) => {
+    const f = fichesPaie[key];
+    if (!f) return;
+    const a = document.createElement("a");
+    a.href = f.data;
+    a.download = f.name;
+    a.click();
+  };
+
+  // Supprimer fiche
+  const deleteFiche = (key) => {
+    if (window.confirm("Supprimer cette fiche de paie ?"))
+      setFichesPaie(prev => { const next = { ...prev }; delete next[key]; return next; });
+  };
+
+  // Alertes pour badge sidebar
+  const fichesMissingNow = eleves.filter(e => !fichesPaie[`${e.id}_${currentYear}_${currentMois}`]).length;
+
+  const NAV = [
+    { id: "dashboard", label: "Tableau de bord", icon: "◈" },
+    { id: "eleves",    label: "Mes élèves",       icon: "◉" },
+    { id: "seances",   label: "Séances",           icon: "◎" },
+    { id: "fiches",    label: "Fiches de paie",    icon: "📄", badge: fichesMissingNow || null },
+  ];
+
+  if (loading) return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", fontFamily: "'Playfair Display', serif", fontSize: 18, color: C.muted }}>
+      Chargement…
+    </div>
+  );
+
+  return (
+    <>
+      <style>{css}</style>
+      <div className="app">
+        <aside className="sidebar">
+          <div className="sidebar-logo">
+            <h1>Nyliram<br/>Cours Particulier</h1>
+            <p>Maths · Français · Histoire-Géo</p>
+          </div>
+          <nav className="nav">
+            {NAV.map(n => (
+              <div key={n.id} className={`nav-item ${page === n.id && !selectedEleve ? "active" : ""}`}
+                onClick={() => { setPage(n.id); setSelectedEleve(null); }}>
+                <span className="nav-icon">{n.icon}</span>
+                {n.label}
+                {n.badge ? <span className="nav-badge">{n.badge}</span> : null}
+              </div>
+            ))}
+          </nav>
+          <div className="sidebar-footer"><p>Nyliram · CM1 → 2nde · 2026-2027</p></div>
+        </aside>
+
+        <main className="main">
+          {page === "dashboard" && !selectedEleve && (
+            <Dashboard eleves={eleves} seances={seances} fichesPaie={fichesPaie} onNav={setPage} />
+          )}
+
+          {page === "eleves" && !selectedEleve && (
+            <Eleves eleves={eleves} seances={seances}
+              onAdd={() => setModal({ type: "eleve" })}
+              onEdit={e => setModal({ type: "eleve", data: e })}
+              onDelete={deleteEleve}
+              onSelect={e => setSelectedEleve(e)} />
+          )}
+
+          {page === "eleves" && selectedEleve && (
+            <FicheEleve
+              eleve={selectedEleve} seances={seances}
+              progression={progression} fichesPaie={fichesPaie}
+              onBack={() => setSelectedEleve(null)}
+              onAddSeance={() => setModal({ type: "seance", eleveId: selectedEleve.id })}
+              onToggleProg={toggleProg}
+              onUploadFiche={uploadFiche}
+              onDownloadFiche={downloadFiche}
+              onDeleteFiche={deleteFiche}
+            />
+          )}
+
+          {page === "seances" && (
+            <Seances seances={seances} eleves={eleves}
+              onAdd={() => setModal({ type: "seance" })} />
+          )}
+
+          {page === "fiches" && (
+            <FichesPaieGlobal
+              eleves={eleves} fichesPaie={fichesPaie}
+              onUpload={uploadFiche} onDownload={downloadFiche} onDelete={deleteFiche} />
+          )}
+        </main>
+      </div>
+
+      {modal?.type === "eleve" && (
+        <ModalEleve initial={modal.data} onSave={addEleve} onClose={() => setModal(null)} />
+      )}
+      {modal?.type === "seance" && (
+        <ModalSeance eleves={eleves} defaultEleveId={modal.eleveId}
+          onSave={addSeance} onClose={() => setModal(null)} />
+      )}
+    </>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+
+// Hide splash
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    const s = document.getElementById('splash');
+    if(s) { s.style.opacity='0'; setTimeout(()=>s.remove(),400); }
+  }, 800);
+});
+
+// PWA install banner
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault(); deferredPrompt = e;
+  const b = document.getElementById('install-banner');
+  if(b && !localStorage.getItem('nyliram-dismissed')) b.style.display='flex';
+});
+document.getElementById('btn-install')?.addEventListener('click', async () => {
+  if(deferredPrompt) { deferredPrompt.prompt(); deferredPrompt=null; }
+  document.getElementById('install-banner').style.display='none';
+});
+document.getElementById('btn-dismiss')?.addEventListener('click', () => {
+  document.getElementById('install-banner').style.display='none';
+  localStorage.setItem('nyliram-dismissed','1');
+});
+</script>
+
+</body>
+</html>
