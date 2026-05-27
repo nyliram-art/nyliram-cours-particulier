@@ -1,14 +1,19 @@
 {
-  "name": "Nyliram Cours Particulier",
-  "short_name": "Nyliram",
+  "name": "T-Kannèl Cours Particulier",
+  "short_name": "T-Kannèl",
   "description": "Gestion des cours particuliers - Maths, Français, Histoire-Géo",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f1923",
-  "theme_color": "#0f1923",
+  "background_color": "#52796f",
+  "theme_color": "#52796f",
   "orientation": "portrait-primary",
   "lang": "fr",
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
   ]
 }
